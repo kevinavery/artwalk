@@ -1,4 +1,2 @@
-networkx==1.11
-colormath==2.1.1
 colorthief==0.2.1
 Pillow=4.3.0

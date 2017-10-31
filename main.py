@@ -1,14 +1,31 @@
 
 from __future__ import print_function
-from colorthief import ColorThief
-from colormath.color_conversions import convert_color
-from colormath.color_diff import delta_e_cie2000
-from colormath.color_objects import LabColor, sRGBColor
+from colorthief import MMCQ
 from imagepreview import ImagePreview
 from PIL import Image, ImageDraw, ImageEnhance, ImageFilter
 import math
 import random
 import threading
+
+
+#
+# This attempts to create art inspired by one of Andrew Covell's paintings
+# I encountered at the Brewery Artwalk in LA on Oct 21, 2017.
+#
+# The painting has the following characteristics:
+#
+#   1. The image comprises many small tiled parallelograms which are painted
+#      individually.
+#   2. Color is applied by painting many small dots, not strokes, which layer
+#      to create details and gradients.
+#   3. Colors are chosen from a small palette. I estimate about a dozen
+#      different colors per parallelogram tile.
+#   4. Each tile has a 3D effect where the colors near the edges get lighter
+#      or darker to help visually separate each tile.
+#
+# This can be applied to any image, but I find that simpler scenes containing
+# high contrast and vibrant colors look best, eg. a sunset landscape.
+#
 
 
 def hex_to_rgb(hex):
@@ -18,22 +35,6 @@ def hex_to_rgb(hex):
 def rgb_to_hex(rgb):
   return '#' + ''.join(['0{0:x}'.format(v) if v < 16
     else '{0:x}'.format(v) for v in rgb])
-
-
-def linear_gradient(start, finish, n):
-  gradient = [start]
-
-  for t in xrange(1, n):
-    # Note: There are other ways to blend colors:
-    # https://stackoverflow.com/questions/22607043/color-gradient-algorithm
-    # https://bsou.io/posts/color-gradients-with-python
-    color_vec = [
-      int(start[j] + (float(t) / (n - 1)) * (finish[j] - start[j]))
-      for j in range(3)
-    ]
-    gradient.append(tuple(color_vec))
-
-  return gradient
 
 
 def draw_dot(x, y, r, color, img):
@@ -56,37 +57,39 @@ def safe_get_pixel(x, y, img):
   return img.getpixel((x, y))
 
 
-def draw_section(ox, oy, o, k, palette):
-  # Draw a gradient as the background
-  sample_x = ox + (k.width / 2)
-  sample_y1 = oy
-  sample_y2 = oy + k.height - 1
-  color_start = safe_get_pixel(sample_x, sample_y1, o)
-  color_finish = safe_get_pixel(sample_x, sample_y2, o)
-  if palette:
-    color_start, color_finish = select_colors(color_start, color_finish, palette)
-  gradient = linear_gradient(color_start, color_finish, k.height)
+def draw_section(ox, oy, o, k):
+  # Sample the region from the original image
+  num_samples = 1000
+  color_samples = []
+  for _ in xrange(num_samples):
+    x = random.randint(0, k.width * 2) - (k.width / 2)
+    y = random.randint(0, k.height * 2) - (k.height / 2)
+    color = safe_get_pixel(ox + x, oy + y, o)
+    color_samples.append(color)
 
-  for y in xrange(0, k.height):
-    for x in xrange(0, k.width):
-      c = gradient[y]
-      k.putpixel((x, y), c)
+  # Cluster similar colors using MMCQ (modified median cut quantization)
+  cmap = MMCQ.quantize(color_samples, 12)
+  palette = cmap.palette
+  print('palette={}'.format(palette))
+
+  # Fill the section to create the background
+  draw = ImageDraw.Draw(k)
+  draw.rectangle([0, 0, k.width, k.height], fill=palette[0])
 
   # Draw dots to create image detail
   dot_radius_factor = 34
   dot_radius = k.width / dot_radius_factor
-  num_dots = 1000
+  num_dots = 2000
   for _ in xrange(num_dots):
     x = random.randint(0, k.width - 1)
     y = random.randint(0, k.height - 1)
 
     # The further we are from the center of the current region,
     # the further we sample outside the current region
-    dx = (x - k.width) / 2
-    dy = (y - k.height) / 2
+    dx = (x - (k.width / 2)) / 2
+    dy = (y - (k.height / 2)) / 2
     color = safe_get_pixel(ox + x + dx, oy + y + dy, o)
-    if palette:
-      color = nearest_color(color, palette)
+    color = nearish_color(color, palette)
     draw_dot(x, y, dot_radius, color, k)
 
 
@@ -103,13 +106,6 @@ def adjust(img, color=1.0, contrast=1.0, brightness=1.0):
   return img
 
 
-def get_mmcq_palette(filepath, colorCount, quality):
-  # This clusters similar colors found in the input image
-  # using the MMCQ (modified median cut quantization) algo.
-  color_thief = ColorThief(filepath)
-  return color_thief.get_palette(color_count=colorCount, quality=quality)
-
-
 def get_material_palette():
   palette = []
   with open('material_color_palette.txt') as f:
@@ -121,37 +117,20 @@ def get_material_palette():
   return palette
 
 
-def rgb_to_lab(rgb):
-  rgb = sRGBColor(rgb[0], rgb[1], rgb[2], is_upscaled=True)
-  return convert_color(rgb, LabColor)
-
-
 def diff_rgb(c0, c1):
   return math.sqrt((c1[0] - c0[0])**2 + (c1[1] - c0[1])**2 + (c1[2] - c0[2])**2)
 
 
-def diff_rgb_lab(rgb, lab):
-  return delta_e_cie2000(rgb_to_lab(rgb), lab)
-
-
-def nearest_color(c, palette):
-  return min(palette, key=lambda cp: diff_rgb(c, cp))
-  #return min(palette, key=lambda cp: diff_rgb_lab(c, cp['lab']))['rgb']
-
-
-def select_colors(c0, c1, palette):
-  # Return two colors r0, r1 in palette closest to c0 and c1
-  r0 = nearest_color(c0, palette)
-
-  #remaining_palette = list(palette)
-  #remaining_palette.remove(r0)
-  remaining_palette = palette
-  r1 = nearest_color(c1, remaining_palette)
-
-  return (r0, r1)
+def nearish_color(c, palette):
+  #return min(palette, key=lambda cp: diff_rgb(c, cp))
+  palette.sort(key=lambda cp: diff_rgb(c, cp))
+  index = 0 if random.random() < .75 else 1
+  return palette[index]
 
 
 def build_mask(w, h):
+  # Creates the parallelogram alpha mask.
+  # (w, h) is the size of the bounding box
   mask = Image.new('RGBA', (w, h))
 
   draw = ImageDraw.Draw(mask)
@@ -205,14 +184,6 @@ def render(filepath, o, preview):
   r = Image.new(o.mode, o.size)
   mask = build_mask(w_section, h_section)
 
-  # Note: I tried using custom palettes to control the output
-  # colors but the results were not as good.
-  #palette = get_mmcq_palette(filepath, 256, 1)
-  #palette = get_material_palette()
-  palette = None
-  #show_palette(palette)
-  #palette = [{'rgb': c, 'lab': rgb_to_lab(c)} for c in palette]
-
   x_init = int(-w_section * (1 + random.random()))
   y_init = int(-h_section * (1 + random.random()))
   sections = gen_sections(x_init, y_init, w_section, h_section, o.width, o.height)
@@ -224,7 +195,7 @@ def render(filepath, o, preview):
     for (x, y) in sections:
       # Draw the current section, then paste it on the output with the shape mask.
       k = Image.new(o.mode, (w_section, h_section))
-      draw_section(x, y, o, k, palette)
+      draw_section(x, y, o, k)
       r.paste(k, box=(x, y), mask=mask)
 
       preview.receive(r)
@@ -240,11 +211,11 @@ def render(filepath, o, preview):
 
 
 def main():
-  filepath = 'input/IMG_2053.JPG'
+  filepath = 'input/treasure_island.JPG'
   o = Image.open(filepath).convert('RGB')
   print(o.mode, o.size, o.format, filepath)
 
-  w = 1000
+  w = 4000
   h = int(o.height * w / float(o.width))
   o = o.resize((w, h))
   o = adjust(o, color=1.0, contrast=1.0, brightness=1.0)
