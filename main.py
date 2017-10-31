@@ -1,13 +1,4 @@
 
-from __future__ import print_function
-from colorthief import MMCQ
-from imagepreview import ImagePreview
-from PIL import Image, ImageDraw, ImageEnhance, ImageFilter
-import math
-import random
-import threading
-
-
 #
 # This attempts to create art inspired by one of Andrew Covell's paintings
 # I encountered at the Brewery Artwalk in LA on Oct 21, 2017.
@@ -26,6 +17,15 @@ import threading
 # This can be applied to any image, but I find that simpler scenes containing
 # high contrast and vibrant colors look best, eg. a sunset landscape.
 #
+
+
+from __future__ import print_function
+from colorthief import MMCQ
+from imagepreview import ImagePreview
+from PIL import Image, ImageDraw, ImageEnhance, ImageFilter
+import math
+import random
+import threading
 
 
 def hex_to_rgb(hex):
